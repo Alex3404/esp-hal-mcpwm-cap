@@ -11,14 +11,10 @@
 //! capture timer during specific software or hardware triggered
 //! 'capture' events.
 //!
-//! ### Capture events can be triggered in 2 ways:
-//! 1. During a falling and/or Rising edge of a preconfigured GPIO pin.
-//! 2. Software triggered captures through [`CaptureChannel::trigger_capture`].
-//!
-//! ### Configuration
+//! ## Configuration
 //! This module provides the flexibility of configuring any GPIO pin as an input
 //! for capturing the rising and/or falling edge of a signal. This module allows
-//! for the ability to trigger software captures.
+//! for the ability to trigger software captures to record the current timer's value.
 //!
 //! ## Example
 //!
@@ -161,7 +157,7 @@ impl<'d, PWM: Instance> CaptureTimer<'d, PWM> {
     }
 
     /// Configure the capture timer with the provided config
-    pub fn set_config(&mut self, config: CaptureTimerConfig) {
+    pub fn apply_config(&mut self, config: CaptureTimerConfig) {
         self.set_sync_phase(config.sync_phase);
     }
 

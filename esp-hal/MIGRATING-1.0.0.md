@@ -182,7 +182,7 @@ expensive.
 
 ## MCPWM changes
 - The `Timer::start` method is now parameterless and doesn't take in a `TimerClockConfig`.
-  Instead, use `Timer::set_config` method to set the config for the `mcpwm::Timer`.
+  Instead, use `Timer::apply_config` method to set the config for the `mcpwm::Timer`.
 - `Timer::start` starts with the configured `StopCondition` rather than being restricted to
   running till `Timer::stop` is called.
 - Timers now have a default configuration when you create a MCPWM instance via `McPwm::new`.
@@ -193,6 +193,6 @@ a simple change.
 
 ```diff
 -mcpwm.timer0.start(timer_clock_cfg);
-+mcpwm.timer0.set_config(timer_clock_cfg);
++mcpwm.timer0.apply_config(timer_clock_cfg);
 +mcpwm.timer0.start();
 ```

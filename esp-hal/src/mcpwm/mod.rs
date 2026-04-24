@@ -102,7 +102,7 @@
 //! let timer_clock_cfg = clock_cfg
 //!     .timer_clock_with_frequency(99, PwmWorkingMode::Increase,
 //! Rate::from_khz(20))?;
-//! mcpwm.timer0.set_config(timer_clock_cfg);
+//! mcpwm.timer0.apply_config(timer_clock_cfg)?;
 //! mcpwm.timer0.start();
 //!
 //! // pin will be high 50% of the time

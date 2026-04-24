@@ -1,24 +1,24 @@
-#![cfg_attr(docsrs, procmacros::doc_replace)]
-
 //! # MCPWM Timer Module
 //!
 //! ## Overview
 //! The `timer` module provides an interface to configure and use timers for
 //! generating `PWM` signals used in motor control and other applications.
 //!
-//! The `timer` module allows the configuration of setting the sync in source
-//! for the timer, and the ability to get their sync out to given to other timers
-//! as their sync in.
+//! * Timers can be configured with different clock frequencies, periods, and prescalers using the
+//!  [`TimerClockConfig`] struct.
 //!
-//! ### Software Sync Events
-//! The `timer` module supports the software triggering of syncs from Timers.
+//! ## Sync Events
+//! * Timers can be configured to generate sync events when the timer counter equals zero, equals
+//!   the period, or when a sync in is received.
+//! * Timers can be configured to listen to sync events from different sources such as other timers
+//!   or external sync inputs. More information in [`crate::mcpwm::sync`].
 #![cfg_attr(
     mcpwm_swsync_can_propagate,
-    doc = "**Note:** Software triggered sync events from timers will propagate to their respective sync outputs on this chip."
+    doc = "\n * **Note:** Software triggered sync events from timers will propagate to their respective sync outputs on this chip."
 )]
 #![cfg_attr(
     not(mcpwm_swsync_can_propagate),
-    doc = "**Note:** Software triggered sync events do not propagate to other timers on this chip."
+    doc = "\n * **Note:** Software triggered sync events do not propagate to other timers on this chip."
 )]
 
 use core::marker::PhantomData;
@@ -52,16 +52,6 @@ pub enum TimerEvent {
     TimerEqualPeriod,
 }
 
-impl From<TimerEvent> for Event {
-    fn from(value: TimerEvent) -> Self {
-        match value {
-            TimerEvent::TimerStop => Event::TimerStop,
-            TimerEvent::TimerEqualZero => Event::TimerEqualZero,
-            TimerEvent::TimerEqualPeriod => Event::TimerEqualPeriod,
-        }
-    }
-}
-
 /// A MCPWM timer
 ///
 /// Every timer of a particular [`MCPWM`](super::McPwm) peripheral can be used
@@ -93,11 +83,20 @@ impl<'d, const TIM: u8, PWM: Instance> Timer<'d, TIM, PWM> {
         timer
     }
 
-    /// Start the given timer with the provided configuration
+    /// Start the timer with the current configuration.
+    /// Refer to the documentation of [`StopCondition`] and
+    /// [`TimerClockConfig`] for more details on the
+    /// configuration of the timer.
     pub fn start(&mut self) {
         // set timer to run with a stop condition
         let stop_condition = self.config.stop_condition as u8;
         let mode = self.config.mode as u8;
+
+        // Update sync counter direction and phase according to the configuration
+        // Since `Timer::set_counter` can change the phase and counter direction.
+        self.set_sync_counter_direction(self.config.sync_direction);
+        self.set_sync_phase(self.config.sync_phase);
+
         self.cfg1().write(|w| unsafe {
             w.start().bits(stop_condition);
             w.mod_().bits(mode)
@@ -120,9 +119,37 @@ impl<'d, const TIM: u8, PWM: Instance> Timer<'d, TIM, PWM> {
     /// If your [`PeriodUpdatingMethod`] is set to [`PeriodUpdatingMethod::Immediately`]
     /// and if your new period is smaller than the current counter value as this will cause weird
     /// behavior.
-    pub fn set_config(&mut self, config: TimerClockConfig) {
+    ///
+    /// ### Config Constraints
+    /// The valid range for phase depends on the timer configuration:
+    /// - When the timer is in [`PwmWorkingMode::UpDown`] mode:
+    ///     - The valid range for phase is `[0, period]` when the sync direction is
+    ///   [`CounterDirection::Increasing`].
+    ///     - The valid range for phase is `[1, period+1]` when the sync direction is
+    ///   [`CounterDirection::Decreasing`].
+    /// - The valid range for phase is `[0, period+1]` when the timer is in another
+    ///   [`PwmWorkingMode`].
+    pub fn apply_config(&mut self, config: TimerClockConfig) -> Result<(), ConfigError> {
+        // Check for valid phase range
+        if config.sync_phase > config.period.saturating_add(1) {
+            return Err(ConfigError::InvalidPhaseRange);
+        }
+
+        if config.mode == PwmWorkingMode::UpDown {
+            match config.sync_direction {
+                CounterDirection::Increasing if config.sync_phase > config.period => {
+                    return Err(ConfigError::InvalidPhaseRange);
+                }
+                CounterDirection::Decreasing if config.sync_phase == 0 => {
+                    return Err(ConfigError::InvalidPhaseRange);
+                }
+                _ => {}
+            }
+        }
+
         self.config = config;
         self.configure();
+        Ok(())
     }
 
     /// Set the timer counter to the provided value
@@ -322,11 +349,33 @@ pub enum SyncOutSelect {
     SyncWhenEqualPeriod = 2,
 }
 
+/// Sync error for an invalid sync configuration
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+#[non_exhaustive]
+pub enum ConfigError {
+    /// Error is thrown when the provided phase is out of range for the timer configuration
+    InvalidPhaseRange,
+}
+
+impl core::error::Error for ConfigError {}
+
+impl core::fmt::Display for ConfigError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            ConfigError::InvalidPhaseRange => write!(
+                f,
+                "Provided phase is out of range for the current timer configuration"
+            ),
+        }
+    }
+}
+
 /// Clock configuration of a MCPWM timer
 ///
 /// Use [`PeripheralClockConfig::timer_clock_with_prescaler`](super::PeripheralClockConfig::timer_clock_with_prescaler) or
 /// [`PeripheralClockConfig::timer_clock_with_frequency`](super::PeripheralClockConfig::timer_clock_with_frequency) to it.
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct TimerClockConfig {
     frequency: Rate,
@@ -361,9 +410,9 @@ impl TimerClockConfig {
             period_updating_method: PeriodUpdatingMethod::Immediately,
             stop_condition: StopCondition::RunContinuously,
             mode,
-            sync_out: SyncOutSelect::SyncIn,
             sync_phase: 0,
             sync_direction: CounterDirection::Increasing,
+            sync_out: SyncOutSelect::SyncIn,
         }
     }
 
@@ -398,15 +447,34 @@ impl TimerClockConfig {
             period_updating_method: PeriodUpdatingMethod::Immediately,
             stop_condition: StopCondition::RunContinuously,
             mode,
-            sync_out: SyncOutSelect::SyncIn,
             sync_phase: 0,
             sync_direction: CounterDirection::Increasing,
+            sync_out: SyncOutSelect::SyncIn,
         })
     }
 
-    /// Default configuration for the timer with the provided clock configuration
-    pub(super) fn default(clock: &PeripheralClockConfig) -> Self {
-        Self::with_prescaler(clock, u16::MAX, PwmWorkingMode::Increase, 0)
+    /// Set the sync out selection for the timer. Refer to how sync events are
+    /// handled in the [`Timer`] documentation.
+    pub fn with_sync_out(self, sync_out: SyncOutSelect) -> Self {
+        Self { sync_out, ..self }
+    }
+
+    /// Set the sync phase for the timer. Refer to how sync events are
+    /// handled in the [`Timer`] documentation.
+    pub fn with_phase(self, phase: u16) -> Self {
+        Self {
+            sync_phase: phase,
+            ..self
+        }
+    }
+
+    /// Set the sync counter direction for the timer. Refer to how sync events are
+    /// handled in the [`Timer`] documentation.
+    pub fn with_direction(self, direction: CounterDirection) -> Self {
+        Self {
+            sync_direction: direction,
+            ..self
+        }
     }
 
     /// Set the method for updating the PWM period
@@ -425,30 +493,17 @@ impl TimerClockConfig {
         }
     }
 
-    /// Set sync out selection
-    pub fn with_sync_out_selection(self, sync_out: SyncOutSelect) -> Self {
-        Self { sync_out, ..self }
-    }
-
-    /// Sets the counter direction when the timer receives a sync event in up-down mode
-    pub fn with_sync_direction(self, direction: CounterDirection) -> Self {
-        Self {
-            sync_direction: direction,
-            ..self
-        }
-    }
-
-    /// Sets the sync phase for the timer
-    pub fn with_sync_phase(self, sync_phase: u16) -> Self {
-        Self { sync_phase, ..self }
-    }
-
     /// Get the timer clock frequency.
     ///
     /// ### Note:
     /// The actual value is rounded down to the nearest `u32` value
     pub fn frequency(&self) -> Rate {
         self.frequency
+    }
+
+    /// Default configuration for the timer with the provided clock configuration
+    pub(super) fn default(clock: &PeripheralClockConfig) -> Self {
+        Self::with_prescaler(clock, u16::MAX, PwmWorkingMode::Increase, 0)
     }
 }
 
@@ -475,11 +530,11 @@ pub enum PeriodUpdatingMethod {
 pub enum StopCondition {
     /// Defines to start the timer now and run till [`Timer::stop`] is called.
     RunContinuously = 2,
-    /// Defines to start the timer now and run till the
-    /// next time the timers counts equal zeros
+    /// Defines to start the timer now and run till
+    /// the counter equals zero
     StopAtZero      = 3,
-    /// Defines to start the timer now and run till the
-    /// next time the timers counts equals period
+    /// Defines to start the timer now and run till
+    /// the counter equals period
     StopAtPeriod    = 4,
 }
 
@@ -505,6 +560,15 @@ pub enum PwmWorkingMode {
     UpDown   = 3,
 }
 
+impl From<bool> for CounterDirection {
+    fn from(bit: bool) -> Self {
+        match bit {
+            false => CounterDirection::Increasing,
+            true => CounterDirection::Decreasing,
+        }
+    }
+}
+
 /// The direction the timer counter is changing
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[repr(u8)]
@@ -515,11 +579,12 @@ pub enum CounterDirection {
     Decreasing = 1,
 }
 
-impl From<bool> for CounterDirection {
-    fn from(bit: bool) -> Self {
-        match bit {
-            false => CounterDirection::Increasing,
-            true => CounterDirection::Decreasing,
+impl From<TimerEvent> for Event {
+    fn from(value: TimerEvent) -> Self {
+        match value {
+            TimerEvent::TimerStop => Event::TimerStop,
+            TimerEvent::TimerEqualZero => Event::TimerEqualZero,
+            TimerEvent::TimerEqualPeriod => Event::TimerEqualPeriod,
         }
     }
 }
