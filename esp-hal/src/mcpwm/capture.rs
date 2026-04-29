@@ -42,18 +42,15 @@
 //! let clock_cfg = PeripheralClockConfig::with_frequency(Rate::from_mhz(__mcpwm_freq__))?;
 //! let mut mcpwm = McPwm::new(peripherals.MCPWM0, clock_cfg);
 //!
-//! // capture rising edges
-//! let capture_cfg = CaptureChannelConfig::default().with_capture_mode(CaptureMode::RisingEdge);
-//!
 //! // initialize capture timer
 //! let cap_timer_cfg = CaptureTimerConfig::default();
 //! mcpwm.capture_timer.set_config(cap_timer_cfg);
 //! mcpwm.capture_timer.start();
 //!
-//! // create capture channel with given config and `pin`
-//! let mut capture = mcpwm.capture0.configure(capture_cfg).with_signal_input(pin);
+//! // create capture channel with a `pin` and rising edge capture mode
+//! let mut capture = mcpwm.capture0.with_signal_input(pin);
 //! capture.set_enable(true);
-//! capture.listen();
+//! capture.listen(CaptureMode::RisingEdge);
 //!
 //! critical_section::with(|cs| CAP0.borrow_ref_mut(cs).replace(capture));
 //!
@@ -233,7 +230,6 @@ impl CaptureEvent {
 // Hash cannot be implemented for CaptureMode
 pub struct CaptureChannelConfig {
     invert: bool,
-    capture_mode: CaptureMode,
     prescaler: u8,
 }
 
@@ -242,13 +238,7 @@ impl CaptureChannelConfig {
     pub fn with_invert(self, invert: bool) -> Self {
         Self { invert, ..self }
     }
-    /// Sets the capture mode for the config
-    pub fn with_capture_mode(self, capture_mode: CaptureMode) -> Self {
-        Self {
-            capture_mode,
-            ..self
-        }
-    }
+
     /// Sets the prescaler for the config
     pub fn with_prescaler(self, prescaler: u8) -> Self {
         Self { prescaler, ..self }
@@ -259,29 +249,8 @@ impl Default for CaptureChannelConfig {
     fn default() -> Self {
         Self {
             invert: false,
-            capture_mode: CaptureMode::None,
             prescaler: 0,
         }
-    }
-}
-
-/// Capture channel creator
-pub struct CaptureChannelCreator<'d, const CHAN: u8, PWM: Instance> {
-    phantom: PhantomData<&'d PWM>,
-    _guard: PeripheralGuard,
-}
-
-impl<'d, const CHAN: u8, PWM: Instance> CaptureChannelCreator<'d, CHAN, PWM> {
-    pub(super) fn new(guard: PeripheralGuard) -> Self {
-        Self {
-            phantom: PhantomData,
-            _guard: guard,
-        }
-    }
-
-    /// Configure a new capture channel from a config
-    pub fn configure(self, config: CaptureChannelConfig) -> CaptureChannel<'d, CHAN, PWM> {
-        CaptureChannel::new(self._guard, config)
     }
 }
 
@@ -311,7 +280,6 @@ impl<'d, const CHAN: u8, PWM: Instance> CaptureChannel<'d, CHAN, PWM> {
 
     pub(super) fn configure(&mut self, config: CaptureChannelConfig) {
         Self::cfg().modify(|_, w| {
-            w.mode().variant(config.capture_mode);
             w.in_invert().variant(config.invert);
             unsafe { w.prescale().bits(config.prescaler) }
         });
@@ -350,17 +318,23 @@ impl<'d, const CHAN: u8, PWM: Instance> CaptureChannel<'d, CHAN, PWM> {
 
     /// Sets the capture channel to listen to captures on specific edge events
     /// This channel can listen to Falling, and/or Rising edges on any of the GPIO pins.
+    /// Using [`CaptureMode::None`] is the same as calling [`CaptureChannel::unlisten`] and will
+    /// stop listening to any events on this channel.
     #[instability::unstable]
-    pub fn listen(&mut self) {
+    pub fn listen(&mut self, capture_mode: CaptureMode) {
+        Self::cfg().modify(|_, w| w.mode().variant(capture_mode));
+
         let info = PWM::info();
-        info.enable_listen::<CHAN>(EnumSet::only(Event::Capture), true);
+        info.enable_listen::<CHAN>(
+            EnumSet::only(Event::Capture),
+            capture_mode != CaptureMode::None,
+        );
     }
 
     /// Stops listening to events on this channel
     #[instability::unstable]
     pub fn unlisten(&mut self) {
-        let info = PWM::info();
-        info.enable_listen::<CHAN>(EnumSet::only(Event::Capture), false);
+        self.listen(CaptureMode::None);
     }
 
     /// If the interrupt was set for this channel

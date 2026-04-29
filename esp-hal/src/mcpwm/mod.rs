@@ -117,7 +117,7 @@ use paste::paste;
 
 #[cfg(soc_has_mcpwm0)]
 use crate::mcpwm::{
-    capture::{CaptureChannelCreator, CaptureTimer},
+    capture::{CaptureChannel, CaptureTimer},
     operator::Operator,
     sync::SyncLine,
     timer::Timer,
@@ -125,6 +125,7 @@ use crate::mcpwm::{
 use crate::{
     gpio::{InputSignal, OutputSignal},
     interrupt::{self, InterruptHandler},
+    mcpwm::capture::CaptureChannelConfig,
     pac,
     private::DropGuard,
     soc::clocks::{self, ClockTree},
@@ -150,9 +151,6 @@ for_each_mcpwm!(
 
                 /// MCPWM Driver for MCPWM<$id>
                 pub type McPwm<'d> = super::McPwm<'d, MCPWMPeripheral<'d>>;
-                /// Capture channel creator for MCPWM<$id>
-                pub type CaptureChannelCreator<'d, const NUM: u8> =
-                    capture::CaptureChannelCreator<'d, NUM, MCPWMPeripheral<'d>>;
                 /// Capture Channel for MCPWM<$id>
                 pub type CaptureChannel<'d, const NUM: u8> =
                     capture::CaptureChannel<'d, NUM, MCPWMPeripheral<'d>>;
@@ -197,11 +195,11 @@ pub struct McPwm<'d, PWM: Instance> {
     pub operator2: Operator<'d, 2, PWM>,
 
     /// Capture0
-    pub capture0: CaptureChannelCreator<'d, 0, PWM>,
+    pub capture0: CaptureChannel<'d, 0, PWM>,
     /// Capture1
-    pub capture1: CaptureChannelCreator<'d, 1, PWM>,
+    pub capture1: CaptureChannel<'d, 1, PWM>,
     /// Capture2
-    pub capture2: CaptureChannelCreator<'d, 2, PWM>,
+    pub capture2: CaptureChannel<'d, 2, PWM>,
 
     /// Sync0
     pub sync0: SyncLine<'d, 0, PWM>,
@@ -235,9 +233,9 @@ impl<'d, PWM: Instance> McPwm<'d, PWM> {
             operator1: Operator::new(guard.clone()),
             operator2: Operator::new(guard.clone()),
             capture_timer: CaptureTimer::new(guard.clone()),
-            capture0: CaptureChannelCreator::new(guard.clone()),
-            capture1: CaptureChannelCreator::new(guard.clone()),
-            capture2: CaptureChannelCreator::new(guard),
+            capture0: CaptureChannel::new(guard.clone(), CaptureChannelConfig::default()),
+            capture1: CaptureChannel::new(guard.clone(), CaptureChannelConfig::default()),
+            capture2: CaptureChannel::new(guard, CaptureChannelConfig::default()),
             sync0: SyncLine::new(),
             sync1: SyncLine::new(),
             sync2: SyncLine::new(),

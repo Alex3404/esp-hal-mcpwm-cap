@@ -181,13 +181,13 @@ impl From<SyncKind> for SyncInSelect {
                 0 => SyncInSelect::SyncLine0,
                 1 => SyncInSelect::SyncLine1,
                 2 => SyncInSelect::SyncLine2,
-                _ => panic!("Invalid sync line"),
+                _ => unreachable!(),
             },
             SyncKind::TimerSyncOut(timer) => match timer {
                 0 => SyncInSelect::Timer0SyncOut,
                 1 => SyncInSelect::Timer1SyncOut,
                 2 => SyncInSelect::Timer2SyncOut,
-                _ => panic!("Invalid timer for sync out"),
+                _ => unreachable!(),
             },
         }
     }
